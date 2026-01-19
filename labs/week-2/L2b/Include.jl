@@ -2,8 +2,6 @@
 const _ROOT = pwd();
 const _PATH_TO_SRC = joinpath(_ROOT, "src");
 const _PATH_TO_DATA = joinpath(_ROOT, "data");
-const _PATH_TO_TMP = joinpath(_ROOT, "tmp");
-const _PATH_TO_FRAMES = joinpath(_ROOT, "frames");
 
 # check do we have a Manifest.toml file?
 using Pkg;
@@ -15,17 +13,27 @@ end
 # load external packages
 using VLDataScienceMachineLearningPackage
 using CSV
-using DataFrames
+using JLD2
 using FileIO
-using StatsPlots
-using Plots
-using Colors
+using DataFrames
 using Statistics
 using LinearAlgebra
-using Distances
-using JLD2
+using KernelFunctions
+using NNlib
+using HTTP
+using JSON
+using ColorVectorSpace
 using PrettyTables
-using Clustering
-using ProgressMeter
 using Distributions
-using Random
+using Plots
+using Colors
+using BenchmarkTools
+using SparseArrays
+
+# include my codes
+include(joinpath(_PATH_TO_SRC, "Types.jl"));
+include(joinpath(_PATH_TO_SRC, "Factory.jl"));
+include(joinpath(_PATH_TO_SRC, "Network.jl"));
+include(joinpath(_PATH_TO_SRC, "Handler.jl"));
+include(joinpath(_PATH_TO_SRC, "Compute.jl"));
+include(joinpath(_PATH_TO_SRC, "Eigendecomposition.jl"));
