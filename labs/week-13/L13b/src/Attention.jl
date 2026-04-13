@@ -209,23 +209,25 @@ Flux.@layer AttentionClassifier trainable=(attention, head)
 """Single-head constructor (backward-compatible with L13a)."""
 function AttentionClassifier(d_emb::Int, d_k::Int, d_v::Int,
                               d_hidden::Int, n_classes::Int;
-                              n_max::Int=32)
+                              n_max::Int=32, dropout::Float64=0.0)
     return AttentionClassifier(
         sinusoidal_pe(d_emb, n_max),                                             # positional encoding
         SelfAttention(d_emb, d_k, d_v),                                          # single-head attention
-        Chain(Dense(d_v => d_hidden, relu), Dense(d_hidden => n_classes)),        # MLP head
+        Chain(Dense(d_v => d_hidden, relu), Dropout(dropout),
+              Dense(d_hidden => n_classes)),                                      # MLP head with dropout
     )
 end
 
 """Multi-head constructor."""
 function AttentionClassifier(d_emb::Int, d_k::Int, d_v::Int, n_heads::Int,
                               d_hidden::Int, n_classes::Int;
-                              n_max::Int=32)
+                              n_max::Int=32, dropout::Float64=0.0)
     d_out = d_v  # output dimension of multi-head attention matches d_v for the MLP head
     return AttentionClassifier(
         sinusoidal_pe(d_emb, n_max),                                             # positional encoding
         MultiHeadAttention(d_emb, d_k, d_v, n_heads, d_out),                    # multi-head attention
-        Chain(Dense(d_out => d_hidden, relu), Dense(d_hidden => n_classes)),      # MLP head
+        Chain(Dense(d_out => d_hidden, relu), Dropout(dropout),
+              Dense(d_hidden => n_classes)),                                      # MLP head with dropout
     )
 end
 
