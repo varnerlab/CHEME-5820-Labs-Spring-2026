@@ -264,3 +264,26 @@ function attention_weights(m::AttentionClassifier,
     _, w = m.attention(X_pe, mask)
     return w
 end
+
+"""
+    per_head_attention_weights(m::AttentionClassifier, X, mask) -> Vector{Array{Float32, 3}}
+
+Forward `m` over `(X, mask)` and return a vector of per-head attention weight
+matrices. Each element is an `(n, n, B)` array from a single head.
+
+This is used to inspect what individual heads have learned to attend to.
+For single-head models, returns a one-element vector.
+"""
+function per_head_attention_weights(m::AttentionClassifier,
+                                    X::AbstractArray{<:Real, 3},
+                                    mask::AbstractMatrix{Bool})::Vector{Array{Float32, 3}}
+    _, n, _ = size(X)
+    X_pe = X .+ m.PE[:, 1:n, :]
+
+    if m.attention isa MultiHeadAttention
+        return [let (_, w) = h(X_pe, mask); Array(w) end for h in m.attention.heads]
+    else
+        _, w = m.attention(X_pe, mask)
+        return [Array(w)]
+    end
+end
