@@ -174,16 +174,16 @@ Mean-pool a `(d, n, B)` tensor along its sequence dimension (dim=2), averaging o
 over positions where `mask` is true. Returns a `(d, B)` matrix with one pooled
 vector per batch element.
 
-This collapses the sequence into a single fixed-size vector per review,
+This collapses the sequence into a single fixed-size vector per headline,
 which can then be passed to the MLP classification head.
 """
 function masked_mean_pool(out::AbstractArray{<:Real, 3},
                            mask::AbstractMatrix{Bool})
     _, n, B = size(out)
     mask_f = reshape(Float32.(mask), 1, n, B)          # (1, n, B) — broadcast-compatible with out
-    counts = sum(mask_f; dims = 2)                     # (1, 1, B) — number of valid tokens per review
+    counts = sum(mask_f; dims = 2)                     # (1, 1, B) — number of valid tokens per headline
     pooled = sum(out .* mask_f; dims = 2) ./ max.(counts, 1.0f0)  # avoid division by zero
-    return dropdims(pooled; dims = 2)                  # (d, B) — one vector per review
+    return dropdims(pooled; dims = 2)                  # (d, B) — one vector per headline
 end
 
 """
@@ -243,7 +243,7 @@ function (m::AttentionClassifier)(X::AbstractArray{<:Real, 3},
     _, n, B = size(X)
     X_pe = X .+ m.PE[:, 1:n, :]          # add positional encoding (broadcasts over batch)
     out, _ = m.attention(X_pe, mask)      # (d_v, n, B) — context-aware token representations
-    pooled = masked_mean_pool(out, mask)  # (d_v, B) — one vector per review
+    pooled = masked_mean_pool(out, mask)  # (d_v, B) — one vector per headline
     return m.head(pooled)                 # (n_classes, B) — class logits
 end
 
