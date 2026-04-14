@@ -3,4 +3,4 @@ glove.*.txt
 glove.*.zip
 
 # Trained model checkpoints (regenerated on first run)
-*.jld2
+# *.jld2
