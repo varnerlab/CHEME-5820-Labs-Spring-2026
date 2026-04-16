@@ -1,3 +1,7 @@
+# This file contains the text-generation utilities used after training. The
+# comments explain how logits become sampled tokens and how autoregressive
+# generation feeds the model its own outputs.
+
 """
     sample_next_token(logits::AbstractVector{Float32}; temperature=1.0, top_k=nothing,
                        rng=Random.default_rng()) -> Int
@@ -16,18 +20,25 @@ function sample_next_token(logits::AbstractVector{Float32};
                             temperature::Real = 1.0,
                             top_k::Union{Nothing, Int} = nothing,
                             rng::AbstractRNG = Random.default_rng())::Int
+    # `temperature == 0` is the deterministic limit of sampling: always choose
+    # the most likely token.
     if temperature == 0
         return argmax(logits)
     end
 
+    # Temperature rescales the logits before softmax. Lower values sharpen the
+    # distribution; higher values flatten it.
     scaled = Float32.(logits ./ Float32(temperature))
 
     if top_k !== nothing && top_k > 0 && top_k < length(scaled)
-        # zero out everything except the top-k entries by sending them to -Inf
+        # Keep only the top-k logits and suppress the rest before softmax.
+        # The threshold is the smallest value that should remain eligible.
         threshold = partialsort(scaled, length(scaled) - top_k + 1; rev = false)
         scaled = ifelse.(scaled .< threshold, -1.0f9, scaled)
     end
 
+    # Softmax converts logits into a categorical probability distribution, and
+    # `StatsBase.sample` draws one token id from that distribution.
     probs = softmax(scaled)
     return StatsBase.sample(rng, 1:length(probs), Weights(probs))
 end
@@ -48,20 +59,23 @@ function generate(model::NanoGPT, prompt_ids::AbstractVector{<:Integer},
                    top_k::Union{Nothing, Int} = nothing,
                    rng::AbstractRNG = Random.default_rng())::Vector{Int}
 
+    # Work on a mutable copy so the original prompt is unchanged.
     ids = Vector{Int}(prompt_ids)
     ctx = model.ctx_len
 
     for _ in 1:n_new_tokens
-        # window the context: take the last ctx_len tokens
+        # The model can only attend across `ctx_len` positions, so generation
+        # always feeds it the most recent window of tokens.
         window_start = max(1, length(ids) - ctx + 1)
         window = ids[window_start:end]
         T = length(window)
 
-        # forward pass: shape (vocab_size, T, 1)
+        # The model expects a `(time, batch)` integer matrix. During sampling we
+        # generate one sequence at a time, so the batch size is 1.
         X = reshape(Int.(window), T, 1)
         logits = model(X)
 
-        # take logits at the LAST position
+        # Only the last position predicts the next unseen token to append.
         last_logits = vec(logits[:, end, 1])
 
         next_id = sample_next_token(last_logits; temperature = temperature,
@@ -85,6 +99,8 @@ function sample_text(model::NanoGPT, vocab::CharVocabulary, prompt::String,
                       temperature::Real = 1.0,
                       top_k::Union{Nothing, Int} = nothing,
                       rng::AbstractRNG = Random.default_rng())::String
+    # This helper keeps the notebook code readable by hiding the
+    # encode/generate/decode round trip behind one function call.
     ids = encode(prompt, vocab)
     full_ids = generate(model, ids, n_new_tokens;
                          temperature = temperature, top_k = top_k, rng = rng)

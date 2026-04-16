@@ -1,3 +1,7 @@
+# This file defines the top-level decoder-only language model used in the lab.
+# The implementation is deliberately compact, so the comments below call out the
+# tensor shapes and the role of each learnable component.
+
 """
     NanoGPT(vocab_size, d_model, n_heads, n_layers, ctx_len; d_ff = 4 * d_model)
 
@@ -24,16 +28,18 @@ column indexing. The LM head is a linear layer with no bias.
 struct NanoGPT
     tok_emb::Matrix{Float32}     # (d_model, vocab_size)
     pos_emb::Matrix{Float32}     # (d_model, ctx_len)
-    blocks::Vector{DecoderBlock}
-    ln_final::LayerNorm
-    lm_head::Dense
-    ctx_len::Int
+    blocks::Vector{DecoderBlock} # stack of identical decoder blocks
+    ln_final::LayerNorm          # final normalization before vocabulary projection
+    lm_head::Dense               # linear map from hidden state to token logits
+    ctx_len::Int                 # maximum number of positions the model can read
 end
 
 Flux.@layer NanoGPT trainable=(tok_emb, pos_emb, blocks, ln_final, lm_head)
 
 function NanoGPT(vocab_size::Int, d_model::Int, n_heads::Int, n_layers::Int, ctx_len::Int;
                   d_ff::Int = 4 * d_model)
+    # Use the common 1/sqrt(d_model) scale so the randomly initialized embedding
+    # and projection matrices start with a controlled variance.
     s = 1.0f0 / sqrt(Float32(d_model))
     return NanoGPT(
         randn(Float32, d_model, vocab_size) .* s,
@@ -50,24 +56,29 @@ function (m::NanoGPT)(X_ids::AbstractMatrix{<:Integer})
     @assert T <= m.ctx_len "input sequence length T=$T exceeds model context length $(m.ctx_len)"
     d_model = size(m.tok_emb, 1)
 
-    # token embedding lookup: (d_model, T*B), then reshape to (d_model, T, B)
+    # Token ids arrive as a (time, batch) matrix. Column lookup on `tok_emb`
+    # expects a vector of ids, so we flatten first and then reshape the result
+    # back into a 3-D hidden-state tensor.
     flat_ids = vec(X_ids)
     tok_e = m.tok_emb[:, flat_ids]
     H = reshape(tok_e, d_model, T, B)
 
-    # add positional embedding (broadcasts over the batch dim)
+    # Positional embeddings depend only on the time index, so the same
+    # `(d_model, T)` slice is broadcast across every example in the batch.
     pos_e = m.pos_emb[:, 1:T]
     H = H .+ reshape(pos_e, d_model, T, 1)
 
-    # apply decoder blocks
+    # Each decoder block preserves shape while refining the representation with
+    # masked self-attention and a feedforward update.
     for block in m.blocks
         H = block(H)
     end
 
-    # final layer norm
+    # Normalize once more before projecting hidden states into vocabulary space.
     H = m.ln_final(H)
 
-    # LM head: (d_model, T, B) → (vocab_size, T, B)
+    # The language-model head produces one logit vector per time step and batch
+    # element. The largest logit corresponds to the most likely next token.
     return m.lm_head(H)
 end
 
@@ -82,6 +93,8 @@ function nanogpt_loss(model::NanoGPT,
                        Y_ids::AbstractMatrix{<:Integer})
     logits = model(X_ids)
     V, T, B = size(logits)
+    # Flux expects examples along the second axis, so collapse time and batch
+    # into one long list of supervised next-token predictions.
     return Flux.logitcrossentropy(reshape(logits, V, T * B),
                                    Flux.onehotbatch(vec(Y_ids), 1:V))
 end
