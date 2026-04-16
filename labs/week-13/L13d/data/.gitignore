@@ -3,4 +3,4 @@ input.txt
 tinyshakespeare.txt
 
 # Trained model checkpoints (regenerated on first run)
-*.jld2
+# *.jld2 = we want to commit the model checkpoints
