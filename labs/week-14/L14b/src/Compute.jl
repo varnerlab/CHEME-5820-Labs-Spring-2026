@@ -162,10 +162,38 @@ function log_growth_rate(prices::AbstractVector; Δt::Float64)
 end
 
 """
+    static_alpha_beta(u::AbstractVector, y::AbstractVector) -> (α, β)
+
+Ordinary-least-squares fit of the single-index-model regression
+`yₜ = α + β uₜ + εₜ` on the full paired series `(u, y)`. Returns the scalar
+intercept `α` and slope `β`, which the caller can then freeze and apply to
+any future input via `α .+ β .* u_new`. The intercept is left free (this is
+the single-index model, not CAPM).
+"""
+function static_alpha_beta(u::AbstractVector, y::AbstractVector)
+    length(u) == length(y) || error("length(u) = $(length(u)) must equal length(y) = $(length(y))")
+    length(u) >= 2 || error("need at least two paired samples")
+    ū = mean(u)
+    ȳ = mean(y)
+    num = 0.0
+    den = 0.0
+    @inbounds for i in eachindex(u)
+        du = u[i] - ū
+        num += du * (y[i] - ȳ)
+        den += du * du
+    end
+    den > 0 || error("zero variance in u; cannot fit a slope")
+    β = num / den
+    α = ȳ - β * ū
+    return (α, β)
+end
+
+"""
     rolling_beta(u::AbstractVector, y::AbstractVector; window::Int) -> (α, β, ŷ)
 
-Rolling-window ordinary-least-squares estimate of the CAPM regression
-`yₜ = α + β uₜ + εₜ` using a lookback window of size `window`. For every
+Rolling-window ordinary-least-squares estimate of the single-index-model regression
+`yₜ = α + β uₜ + εₜ` using a lookback window of size `window`. The intercept `α`
+is left free (unlike CAPM, which pins `α = 0` on excess returns). For every
 `t ≥ window + 1`, refit `(α_t, β_t)` on the preceding `window` samples
 `(u_{t-window:t-1}, y_{t-window:t-1})` and form the prediction
 `ŷ_t = α_t + β_t · u_t`. The first `window` entries of `α`, `β`, and `ŷ`
