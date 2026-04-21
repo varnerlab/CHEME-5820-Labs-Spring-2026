@@ -175,6 +175,47 @@ function denormalize_minmax(data::Matrix{Float64}, state_mins::Vector{Float64},
 end
 
 """
+    compute_feed_on(glc::AbstractVector{<:Real}; feed_on0::Real = 0.0,
+        slope_tol::Real = 1.0e-6) -> Vector{Float64}
+
+Reconstruct the feed-on indicator at each sampled time step from the sign of
+the glucose slope between consecutive samples. When the pump is off glucose
+is monotonically consumed, so a rise means the feed fired during the interval;
+when the pump is on glucose rebounds toward the feed concentration, so a fall
+means the feed turned off. Concretely:
+
+- `feed_on[t] = 1` if `glc[t] - glc[t-1] >  slope_tol`,
+- `feed_on[t] = 0` if `glc[t] - glc[t-1] < -slope_tol`,
+- otherwise `feed_on[t] = feed_on[t-1]` (hysteresis).
+
+The initial sample inherits `feed_on0` (default 0, matching the simulator's
+"feed starts OFF" convention). This detector is robust to the sampling issue
+that the raw hysteresis replay has: the ODE callback triggers feed-on exactly
+when glucose touches `Glc_min` and glucose rebounds immediately, so discrete
+samples often never fall below `Glc_min`, but the slope sign flip across the
+event is unambiguous.
+"""
+function compute_feed_on(glc::AbstractVector{<:Real};
+    feed_on0::Real = 0.0,
+    slope_tol::Real = 1.0e-6)::Vector{Float64}
+
+    T = length(glc)
+    f = zeros(Float64, T)
+    state = Float64(feed_on0)
+    f[1] = state
+    for t in 2:T
+        dg = glc[t] - glc[t - 1]
+        if dg >  slope_tol
+            state = 1.0
+        elseif dg < -slope_tol
+            state = 0.0
+        end
+        f[t] = state
+    end
+    return f
+end
+
+"""
     denormalize_minmax(data::Vector{Float64}, state_mins::Vector{Float64},
         state_maxs::Vector{Float64}) -> Vector{Float64}
 

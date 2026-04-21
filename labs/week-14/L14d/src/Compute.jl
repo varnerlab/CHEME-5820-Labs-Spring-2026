@@ -208,31 +208,45 @@ function fit_C_multi!(model::MyMimoLegSHippoModel,
 end
 
 """
-    autoregressive_rollout(model::MyMimoLegSHippoModel, x_state0::AbstractVector,
-                            cond::AbstractVector, T::Int) -> Matrix{Float64}
+    autoregressive_rollout_feedon(model::MyMimoLegSHippoModel,
+        x_state0::AbstractVector, cond::AbstractVector,
+        feed_on::AbstractVector; f_idx::Int = 1) -> Matrix{Float64}
 
-Generate a length-`T` state trajectory autoregressively from the trained SSM.
-At every step the model input is the concatenation `[x_state; cond]`, where
-`x_state` is the initial state at step 1 and the model's own prediction from
-step 2 onward. The per-step output `yₜ = C xₜ + D uₜ` is interpreted as the
-predicted next state and used as `x_state` for the next step.
+Autoregressive rollout with a precomputed feed-on trajectory supplied as a
+known exogenous input (alongside `cond`). At step `t` the model input is
 
-Returns a `(T × length(x_state0))` matrix whose rows are the predicted states
-at time steps `t = 1, …, T`. Row 1 is always the supplied initial state so
-downstream plotting lines up with the ground-truth trajectory.
+    [x̂ₜ ;  cond ;  feed_on[t] ;  feed_on[t] * cond[f_idx]]
+
+so the bioreactor states are predicted autoregressively while the feed-pump
+schedule is treated as a known operator signal (it is the on/off command the
+controller issued). The extra channel `feed_on[t] * cond[f_idx]` is the
+instantaneous normalized feed rate: a linear readout cannot multiply the
+binary feed-on by the conditioning `F_max` on its own, so we hand it that
+product explicitly. This matches the fed-batch mass balance, where the glucose
+driving term is proportional to `feed_on · F_max / V`.
+
+`model.d_in` must equal `length(x_state0) + length(cond) + 2` and `model.d_out`
+must equal `length(x_state0)`. `length(feed_on)` sets the rollout horizon `T`.
+`f_idx` names the column of `cond` that carries `F_max`; defaults to 1 to
+match the `(F_max, Glc_min, Glc_max)` conditioning layout used in the lab.
+Returns a `(T × length(x_state0))` matrix of predicted normalized states
+whose first row is `x_state0`.
 """
-function autoregressive_rollout(model::MyMimoLegSHippoModel,
+function autoregressive_rollout_feedon(model::MyMimoLegSHippoModel,
     x_state0::AbstractVector{<:Real},
     cond::AbstractVector{<:Real},
-    T::Int,
+    feed_on::AbstractVector{<:Real};
+    f_idx::Int = 1,
 )
-    T >= 1 || error("T must be positive")
+    T = length(feed_on)
+    T >= 1 || error("feed_on must have at least one entry")
     n_state = length(x_state0)
     n_cond  = length(cond)
-    n_state + n_cond == model.d_in ||
-        error("state ($(n_state)) + cond ($(n_cond)) must equal model.d_in = $(model.d_in)")
+    n_state + n_cond + 2 == model.d_in ||
+        error("state ($(n_state)) + cond ($(n_cond)) + 2 feed-channels = $(n_state + n_cond + 2) must equal model.d_in = $(model.d_in)")
     n_state == model.d_out ||
         error("length(x_state0) = $(n_state) must equal model.d_out = $(model.d_out)")
+    1 <= f_idx <= n_cond || error("f_idx = $(f_idx) out of range 1:$(n_cond)")
 
     preds = zeros(Float64, T, n_state)
     preds[1, :] = collect(Float64, x_state0)
@@ -240,18 +254,20 @@ function autoregressive_rollout(model::MyMimoLegSHippoModel,
     h_state = copy(model.x₀)
     u       = zeros(Float64, model.d_in)
     cond_f  = collect(Float64, cond)
+    fon     = collect(Float64, feed_on)
 
     @inbounds for t in 1:(T - 1)
-        # Input at step t: current predicted state + feed-policy conditioning
         for j in 1:n_state
             u[j] = preds[t, j]
         end
         for j in 1:n_cond
             u[n_state + j] = cond_f[j]
         end
+        u[n_state + n_cond + 1] = fon[t]
+        u[n_state + n_cond + 2] = fon[t] * cond_f[f_idx]
+
         h_state = model.Ā * h_state + model.B̄ * u
         y_t     = model.C * h_state .+ model.D * u
-        # Interpret yₜ as the predicted state at time t+1
         for j in 1:n_state
             preds[t + 1, j] = y_t[j]
         end
