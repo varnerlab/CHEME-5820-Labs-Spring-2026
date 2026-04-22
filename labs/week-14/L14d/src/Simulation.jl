@@ -234,3 +234,124 @@ function denormalize_minmax(data::Vector{Float64}, state_mins::Vector{Float64},
 
     return data .* (state_maxs .- state_mins) .+ state_mins;
 end
+
+"""
+    apply_minmax_perstate(data_arrays::Vector{Matrix{Float64}},
+        state_mins::Vector{Float64},
+        state_maxs::Vector{Float64}) -> Vector{Matrix{Float64}}
+
+Apply an existing per-state min-max scaler (produced by
+`normalize_minmax_perstate`) to a new vector of trajectories. Used to
+normalize the clean ground-truth arrays onto the same `[0, 1]` axis defined by
+the noisy-training scaler, so normalized-MSE scoring compares predictions and
+truth on a single comparable scale.
+
+### Arguments
+- `data_arrays::Vector{Matrix{Float64}}`: natural-unit trajectories to
+  transform.
+- `state_mins::Vector{Float64}`, `state_maxs::Vector{Float64}`: per-state
+  bounds returned by `normalize_minmax_perstate` on the training set.
+
+### Returns
+- `Vector{Matrix{Float64}}`: normalized copies on the same `[0, 1]` axis as
+  the input scaler.
+"""
+function apply_minmax_perstate(data_arrays::Vector{Matrix{Float64}},
+    state_mins::Vector{Float64},
+    state_maxs::Vector{Float64})::Vector{Matrix{Float64}}
+
+    n_curves = length(data_arrays);
+    n_states = length(state_mins);
+    normalized_arrays = Vector{Matrix{Float64}}(undef, n_curves);
+    for i in 1:n_curves
+        m = data_arrays[i];
+        out = similar(m);
+        for j in 1:n_states
+            r = state_maxs[j] - state_mins[j];
+            if r > 0.0
+                out[:, j] = (m[:, j] .- state_mins[j]) ./ r;
+            else
+                out[:, j] .= 0.0;
+            end
+        end
+        normalized_arrays[i] = out;
+    end
+    return normalized_arrays;
+end
+
+"""
+    add_measurement_noise(state_arrays_true::Vector{Matrix{Float64}},
+        σ_rel::Union{Real,AbstractVector{<:Real}},
+        train_indices::Vector{Int};
+        rng::AbstractRNG = Random.default_rng(),
+        exclude_indices::Vector{Int} = Int[]) -> Vector{Matrix{Float64}}
+
+Return noisy copies of each trajectory in `state_arrays_true` by adding iid
+Gaussian observation noise to every state at every time step. The per-state
+standard deviation is range-relative, scaled to the state's dynamic range on
+the training set only:
+
+    σ_j = σ_rel * (max_j - min_j)          (scalar σ_rel)
+    σ_j = σ_rel[j] * (max_j - min_j)       (per-state σ_rel)
+
+This gives one knob (`σ_rel = 0.05` means "5% of each state's natural range")
+that generalizes across states with very different magnitudes (gDW/L, mM,
+mg/L). Passing `σ_rel = 0` returns exact copies of the input arrays.
+
+### Arguments
+- `state_arrays_true::Vector{Matrix{Float64}}`: clean ODE-generated natural-unit
+  trajectories (the "truth" that a real experiment would never see directly).
+- `σ_rel`: scalar relative noise level or per-state vector of length `n_states`.
+- `train_indices::Vector{Int}`: indices used to compute the per-state range
+  (mirrors the normalization convention: no test info leaks into the σ scale).
+
+### Keyword arguments
+- `rng::AbstractRNG`: RNG for the noise draws (reproducibility).
+- `exclude_indices::Vector{Int}`: state indices to leave noise-free (for
+  example, `[1]` to skip reactor volume since it comes from a flowmeter rather
+  than a bio-assay).
+
+### Returns
+- `Vector{Matrix{Float64}}`: noisy natural-unit trajectories, same shape as
+  the input.
+"""
+function add_measurement_noise(state_arrays_true::Vector{Matrix{Float64}},
+    σ_rel::Union{Real,AbstractVector{<:Real}},
+    train_indices::Vector{Int};
+    rng::AbstractRNG = Random.default_rng(),
+    exclude_indices::Vector{Int} = Int[])::Vector{Matrix{Float64}}
+
+    n_states = size(state_arrays_true[1], 2);
+    σ_vec = σ_rel isa Real ? fill(Float64(σ_rel), n_states) : Float64.(collect(σ_rel));
+    length(σ_vec) == n_states || error("σ_rel vector length ($(length(σ_vec))) does not match n_states ($(n_states))");
+
+    # compute per-state range on training set only (no leakage from the held-out runs)
+    state_mins = fill(Inf, n_states);
+    state_maxs = fill(-Inf, n_states);
+    for idx in train_indices
+        for j in 1:n_states
+            col_min = minimum(state_arrays_true[idx][:, j]);
+            col_max = maximum(state_arrays_true[idx][:, j]);
+            state_mins[j] = min(state_mins[j], col_min);
+            state_maxs[j] = max(state_maxs[j], col_max);
+        end
+    end
+    σ_per_state = [σ_vec[j] * (state_maxs[j] - state_mins[j]) for j in 1:n_states];
+    for j in exclude_indices
+        σ_per_state[j] = 0.0;
+    end
+
+    # draw iid Gaussian noise per (condition, time, state) at the per-state σ_j
+    n = length(state_arrays_true);
+    out = Vector{Matrix{Float64}}(undef, n);
+    for i in 1:n
+        out[i] = copy(state_arrays_true[i]);
+        T = size(out[i], 1);
+        for j in 1:n_states
+            if σ_per_state[j] > 0.0
+                out[i][:, j] .+= σ_per_state[j] .* randn(rng, T);
+            end
+        end
+    end
+    return out;
+end
