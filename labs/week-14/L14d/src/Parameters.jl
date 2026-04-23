@@ -17,7 +17,7 @@ as conditioning inputs to the LSTM.
 """
 function build_default_parameters(; F_max::Float64, Glc_min::Float64, Glc_max::Float64,
     mu_max::Float64 = 0.029,        # Xing et al. (2010) Table 2: 0.029 1/h
-    K_glc::Float64 = 0.10,          # Xing et al. (2010) Table 3: ~0.084 mM (rounded up slightly)
+    K_glc::Float64 = 5.0,           # teaching-tuned well above Xing et al. (2010) Table 3 (~0.084 mM) so the Monod term lives on its knee inside the feed hysteresis band — glucose prediction errors then couple visibly into biomass and titer
     K_gln::Float64 = 0.05,          # Xing et al. (2010) Table 3: ~0.047 mM
     K_I_lac::Float64 = 43.0,        # Xing et al. (2010) Table 3: 43.0 mM
     K_I_amm::Float64 = 6.5,         # Xing et al. (2010) Table 3: 6.51 mM
