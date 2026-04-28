@@ -21,6 +21,10 @@ grayscale values in `[0, 1]`. Defaults to the first image of that class.
 function load_mnist_image(class::Int, idx::Int = 1)::Matrix{Float64}
     files = list_mnist_files(class)
     @assert 1 <= idx <= length(files) "idx out of range; class $(class) has $(length(files)) images"
+    # Gray.(...) collapses any color channels to a single luminance channel,
+    # then Float64.(...) maps the FixedPointNumbers to a plain matrix in
+    # [0, 1] — the format `image_to_rate_input` expects to feed into
+    # `poisson_encode` as per-pixel firing probabilities.
     img = Float64.(Gray.(load(files[idx])))
     return img
 end

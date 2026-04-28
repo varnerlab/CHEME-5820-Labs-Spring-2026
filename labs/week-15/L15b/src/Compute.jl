@@ -22,6 +22,9 @@ function poisson_encode(rates::AbstractVector{<:Real}, T::Int;
     @assert all(0 .<= rates .<= 1) "rates must lie in [0, 1]"
     d = length(rates)
     U = zeros(Int, d, T)
+    # Bernoulli per (neuron, time-step) — independent draws, so different
+    # neurons with the same rate produce decorrelated spike trains, which
+    # is what the Hebbian rule needs to tell stored keys apart.
     for t in 1:T, j in 1:d
         U[j, t] = rand(rng) < rates[j] ? 1 : 0
     end
@@ -53,13 +56,23 @@ function simulate_lif_layer(I::Matrix{Float64};
     N, T = size(I)
     α    = exp(-Δt / τ_m)
 
+    # Pad an extra column at index 1 to hold the "t = 0" initial condition
+    # (V = 0, no spike), so the recursion can read V[j, t] / S[j, t] without
+    # a special-case branch on the first iteration. We strip that column on
+    # return so the output is aligned to t = 1..T.
     V = zeros(Float64, N, T + 1)
     S = zeros(Int,     N, T + 1)
-    r = zeros(Int, N)
+    r = zeros(Int, N)  # per-neuron refractory countdown
 
     for t in 1:T, j in 1:N
+        # Soft reset: subtracting ϑ * S (instead of clamping V to 0) keeps
+        # any "overshoot" above threshold, which is the formulation used in
+        # Limbacher et al. (2022) and avoids artificially flattening high-
+        # input neurons.
         V[j, t + 1] = α * V[j, t] + (1 - α) * I[j, t] - ϑ * S[j, t]
         if r[j] == 0 && H(V[j, t + 1] - ϑ) == 1
+            # Fire and arm the refractory counter; spikes during the next
+            # Δ_abs steps are forbidden no matter how high V climbs.
             S[j, t + 1] = 1
             r[j] = Δ_abs
         else
@@ -92,6 +105,10 @@ function spike_trace(S::AbstractMatrix{<:Integer};
     N, T = size(S)
     α    = exp(-Δt / τ_trace)
     κ = zeros(Float64, N, T)
+    # Causal filter: κ at time t depends on the spike at time t - 1, so a
+    # spike contributes to plasticity only on the *next* step (matches the
+    # one-step pre/post delay in the Hebbian rule of Limbacher et al. 2022).
+    # Loop starts at t = 2 because κ[:, 1] = 0 by definition.
     for t in 2:T, j in 1:N
         κ[j, t] = α * κ[j, t - 1] + (1 - α) * S[j, t - 1]
     end
@@ -131,6 +148,9 @@ function write_phase!(model::MySpikingHMemNetwork,
     @assert size(U_key, 2) == size(U_value, 2)
     T = size(U_key, 2)
 
+    # During the *write* phase both layers are clamped by their own external
+    # input, so the value-layer is forced to fire the target pattern. The
+    # association matrix is *not* in the loop here — recall is what reads it.
     I_key   = I_scale .* Float64.(U_key)
     I_value = I_scale .* Float64.(U_value)
 
@@ -146,8 +166,21 @@ function write_phase!(model::MySpikingHMemNetwork,
     γ_minus = model.γ_minus
     w_max   = model.w_max
     W       = model.W_assoc
+    # Online STDP-style update — applied at *every* time step, not as one
+    # batched outer product, because that's what neuromorphic hardware
+    # actually does and because the (w_max - W) saturation term is non-linear
+    # in W so the time-step-by-time-step path differs from a closed form.
     for t in 1:T, j in 1:model.ell_key, k in 1:model.ell_value
+        # plus_term: soft-saturating Hebbian growth — the (w_max - W) factor
+        # halts at the cap, so a heavily-reinforced synapse stops growing
+        # instead of running away.
         plus_term  = γ_plus  * (w_max - W[k, j]) * κ_value[k, t] * κ_key[j, t]
+        # minus_term: forgetting gated by *only* the key-side trace squared.
+        # Crucially κ_value is absent — that's what lets a fresh write
+        # overwrite a stale association at the same key: when the key fires
+        # again with a *different* value, the active key-coordinate's old
+        # outgoing weights decay regardless of whether the old value happens
+        # to also be active.
         minus_term = γ_minus * W[k, j] * κ_key[j, t]^2
         W[k, j] += plus_term - minus_term
     end
@@ -185,10 +218,17 @@ function recall_phase(model::MySpikingHMemNetwork, U_query_key::Matrix{Int};
     V_key, S_key = simulate_lif_layer(I_key;
         ϑ = model.ϑ, τ_m = model.τ_m, Δt = model.Δt, Δ_abs = model.Δ_abs)
 
+    # Value-layer is driven through W_assoc by the *raw* key spikes S_key,
+    # not the trace κ_key — the readout of an associative memory is the
+    # weighted sum of currently-firing pre-synaptic neurons, exactly how a
+    # neuromorphic chip would route a key activation to a stored value.
+    # Note: W_assoc is read here but never updated, so recall is read-only.
     I_value = c_assoc .* (model.W_assoc * Float64.(S_key))
     V_value, S_value = simulate_lif_layer(I_value;
         ϑ = model.ϑ, τ_m = model.τ_m, Δt = model.Δt, Δ_abs = model.Δ_abs)
 
+    # Traces are returned only for diagnostics / plotting — recall does not
+    # consume them.
     κ_key   = spike_trace(S_key;   τ_trace = model.τ_trace, Δt = model.Δt)
     κ_value = spike_trace(S_value; τ_trace = model.τ_trace, Δt = model.Δt)
 
@@ -213,6 +253,12 @@ function image_to_rate_input(image::Matrix{Float64}, T::Int;
     rng::AbstractRNG = Random.GLOBAL_RNG)::Matrix{Int}
 
     @assert 0 <= max_rate <= 1
+    # Scale by max_rate so even a fully-on pixel never saturates at p = 1
+    # (which would produce a deterministic spike on every step and lose
+    # the Poisson-noise structure the network is calibrated for). The
+    # clamp guards against tiny floating-point overshoots in the loaded
+    # grayscale values — without it a pixel at 1.0000001 would trip the
+    # `0 <= rate <= 1` assertion in poisson_encode.
     rates = clamp.(max_rate .* vec(image), 0.0, 1.0)
     return poisson_encode(rates, T; rng = rng)
 end
@@ -229,6 +275,11 @@ function decode_value_spikes(S_value::AbstractMatrix{<:Integer},
     rows::Int, cols::Int)::Matrix{Float64}
 
     @assert size(S_value, 1) == rows * cols
+    # Inverse of the rate-coding step: per-neuron mean firing fraction over
+    # the recall window estimates the firing probability that *would have*
+    # produced this spike train, which under the encoder is exactly
+    # max_rate * pixel. The output sits in [0, max_rate], so the lab
+    # rescales it to [0, 1] before display.
     rates = vec(mean(S_value; dims = 2))
     return reshape(rates, rows, cols)
 end

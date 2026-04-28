@@ -35,6 +35,10 @@ function build(modeltype::Type{MySpikingHMemNetwork};
     model = modeltype()
     model.ell_key   = ell_key
     model.ell_value = ell_value
+    # Empty memory: every (key, value) association starts at W = 0 and is
+    # written incrementally by `write_phase!`. The matrix is shaped
+    # (ell_value, ell_key) so that I_value = W_assoc * S_key has the right
+    # length without any transpose at recall time.
     model.W_assoc   = zeros(Float64, ell_value, ell_key)
     model.ϑ         = ϑ
     model.τ_m       = τ_m
