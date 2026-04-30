@@ -9,7 +9,8 @@
       "Bash(ps:*)",
       "Bash(kill:*)",
       "WebFetch(domain:nxtai-conference.com)",
-      "WebSearch"
+      "WebSearch",
+      "Skill(audit-objectives-takeaways)"
     ]
   }
 }
