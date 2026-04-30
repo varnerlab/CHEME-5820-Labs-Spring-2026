@@ -19,6 +19,9 @@ using LinearAlgebra
 using MLDatasets
 using Random
 using Statistics
+using JLD2
+using PrettyTables
+using DataFrames
 import GraphMakie
 import CairoMakie as Makie
 using Graphs
