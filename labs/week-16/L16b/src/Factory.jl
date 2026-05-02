@@ -22,6 +22,7 @@ function build(modeltype::Type{MyDQNworldContextModel}, data::NamedTuple)::MyDQN
     model.σ = data.σ;
     model.vmax = data.vmax;
     model.Z = data.Z;
+    model.shape_weight = data.shape_weight;
 
     return model;
 end

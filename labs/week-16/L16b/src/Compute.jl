@@ -88,14 +88,27 @@ function world(s::Vector{Float32}, a::Vector{Float32},
 
     s′ = Float32[x_new, y_new, vx_new, vy_new];
 
-    # terminal check
+    # terminal check (terminals ignore shaping by convention — the bootstrap is
+    # zeroed by the done flag downstream, and shaping a terminal reward muddles
+    # the meaning of "lava cost" / "charger reward" for the lab plots).
     if _is_lava(x_new, y_new, context)
         return s′, context.lava_reward, true;
     elseif _is_charger(x_new, y_new, context)
         return s′, context.charger_reward, true;
     end
 
-    return s′, context.step_cost, false;
+    # potential-based shaping: F = w * (d_old - d_new), where d is the L2
+    # distance from the agent to the charger. Policy-invariant with γ ≈ 1
+    # (Ng, Harada, & Russell 1999), but gives the agent a dense gradient
+    # signal toward the goal instead of waiting for the sparse terminal reward.
+    r = context.step_cost;
+    if context.shape_weight > 0.0f0
+        cx, cy = context.charger;
+        d_old = sqrt((x - cx)^2 + (y - cy)^2);
+        d_new = sqrt((x_new - cx)^2 + (y_new - cy)^2);
+        r += context.shape_weight * (d_old - d_new);
+    end
+    return s′, r, false;
 end
 
 # ----------------------------------------------------------------------------
@@ -298,6 +311,34 @@ function greedy_policy_field(agent::MyDQNLearningAgentModel,
         Q[i, j] = maximum(q);
     end
     return collect(xs), collect(ys), A, Q;
+end
+
+"""
+    save_agent(path, agent, history)
+
+Serialize the trained agent's main and target network parameter states plus
+the per-episode `history::NamedTuple` to a JLD2 file at `path`. We do not
+serialize the replay buffer (it is large and not needed for inference).
+"""
+function save_agent(path::AbstractString, agent::MyDQNLearningAgentModel, history::NamedTuple)
+    main_state = Flux.state(agent.mainnetwork);
+    target_state = Flux.state(agent.targetnetwork);
+    JLD2.jldsave(path; main_state = main_state, target_state = target_state, history = history);
+    return path;
+end
+
+"""
+    load_agent!(path, agent) -> (agent, history)
+
+Load main- and target-network parameter states from a JLD2 file written by
+`save_agent` into the existing `agent`'s networks (architecture must match).
+Returns the updated agent together with the cached `history` NamedTuple.
+"""
+function load_agent!(path::AbstractString, agent::MyDQNLearningAgentModel)
+    data = JLD2.load(path);
+    Flux.loadmodel!(agent.mainnetwork, data["main_state"]);
+    Flux.loadmodel!(agent.targetnetwork, data["target_state"]);
+    return agent, data["history"];
 end
 
 """

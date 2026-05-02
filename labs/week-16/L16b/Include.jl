@@ -7,9 +7,10 @@ const _PATH_TO_FIGS = joinpath(_ROOT, "figs");
 
 using Pkg;
 Pkg.activate(_ROOT);
-if (isfile(joinpath(_ROOT, "Manifest.toml")) == false)
-    Pkg.resolve(); Pkg.instantiate(); Pkg.update();
-end
+# Always reconcile the manifest with Project.toml. `instantiate` is a no-op
+# when nothing has changed, but it installs any new entries (e.g., JLD2)
+# that were added to Project.toml after the manifest was first written.
+Pkg.resolve(); Pkg.instantiate();
 
 # load external packages -
 using Statistics
@@ -24,6 +25,7 @@ using Distributions
 using DataStructures
 using Flux
 using NNlib
+using JLD2
 
 # set the random seed for reproducibility -
 Random.seed!(42);

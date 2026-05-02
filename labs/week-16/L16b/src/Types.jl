@@ -63,6 +63,9 @@ the board geometry, the lava and charger locations, and the dynamics knobs
     - σ::Float32: actuator noise std added to the thrust each step
     - vmax::Float32: cap on the magnitude of vx, vy
     - Z::Normal{Float32}: standard Normal used to draw actuator noise
+    - shape_weight::Float32: gain on potential-based shaping toward the charger
+      (0 disables; otherwise the per-step reward gets `w*(d_old - γ*d_new)`,
+      which is policy-invariant per Ng et al. 1999 with γ from training)
 """
 mutable struct MyDQNworldContextModel <: AbstractWorldContextModel
 
@@ -81,6 +84,7 @@ mutable struct MyDQNworldContextModel <: AbstractWorldContextModel
     σ::Float32
     vmax::Float32
     Z::Normal{Float32}
+    shape_weight::Float32
 
     MyDQNworldContextModel() = new();
 end
